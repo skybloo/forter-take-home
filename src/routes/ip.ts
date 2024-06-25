@@ -1,5 +1,5 @@
 import { FastifyPluginAsync, RequestGenericInterface } from "fastify";
-const config = require('../config.json')
+const config = require('../../config.json')
 const cache: {[ip_address: string]: string} = {}
 const rateLimitCount: RateCounter = {ipapi: {}, ipstack: {}}
 interface RateCounter {
