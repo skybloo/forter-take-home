@@ -27,8 +27,9 @@ const routes: FastifyPluginAsync = async (fastify, opts) => {
 
 async function getCountry(ip: string): Promise<string> {
 
-    const resp = await fetch(`https://ip-api.com/json/${ip}`)
-    return 'US'
+    const resp = await (await fetch(`http://ip-api.com/json/${ip}`)).json() as {country: string}
+
+    return resp.country
 }
 
 export default routes
