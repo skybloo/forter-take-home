@@ -1,30 +1,39 @@
-import { FastifyPluginAsync, FastifyServerOptions, RequestGenericInterface } from 'fastify';
+import { FastifyPluginAsync, RequestGenericInterface } from 'fastify';
 import cache from './plugins/cache';
-import rateLimit from './plugins/rateLimit';
+import rateLimit, { RateCounter } from './plugins/rateLimit';
 import config from '../config.json';
-import { AutoloadPluginOptions } from '@fastify/autoload';
-export interface AppOptions extends FastifyServerOptions, Partial<AutoloadPluginOptions> {
+import sensible from './plugins/sensible';
 
+export enum Errors {
+  RateExceeded = 'RateExceeded',
+  BadAccessKey = 'BadAccessKey'
 }
-// Pass --options via CLI arguments in command to enable these options.
-const options: AppOptions = {
-}
-
-
 
 const app: FastifyPluginAsync = async (instance, opts) => {
 
   instance.register(cache)
   instance.register(rateLimit)
+  instance.register(sensible)
   interface RequestGet extends RequestGenericInterface {
     Querystring: {
       ip: string
     }
   }
   instance.get<RequestGet>('/ip', async (request, reply) => {
-    const ip = request.query.ip
-    const country = await getCountry(ip)
-    return { country }
+    try {
+      const ip = request.query.ip
+      const country = await getCountry(ip)
+      return { country }
+    } catch (e: any) {
+      switch (e?.message) {
+        case Errors.BadAccessKey:
+          return reply.forbidden()
+        case Errors.RateExceeded:
+          return reply.tooManyRequests()
+        default:
+          return reply.internalServerError()
+      }
+    }
 
   })
   interface RequestPost extends RequestGenericInterface {
@@ -32,12 +41,23 @@ const app: FastifyPluginAsync = async (instance, opts) => {
       ip: string
     }
   }
-
   instance.post<RequestPost>('/ip', async (request, reply) => {
-    const ip = request.body.ip
-    const country = await getCountry(ip)
-    return { country }
+    try {
+      const ip = request.body.ip
+      const country = await getCountry(ip)
+      return { country }
+    } catch (e: any) {
+      switch (e?.message) {
+        case Errors.BadAccessKey:
+          return reply.forbidden()
+        case Errors.RateExceeded:
+          return reply.tooManyRequests()
+        default:
+          return reply.internalServerError()
+      }
+    }
   })
+
   async function getCountry(ip: string): Promise<string> {
     if (ip in instance.cache) {
       return instance.cache[ip]
@@ -46,42 +66,59 @@ const app: FastifyPluginAsync = async (instance, opts) => {
     const hour = new Date().getHours().toString()
     const rateLimitCount = instance.rateLimits.counts
     try {
-      if (rateLimitCount.ipapi?.[hour] >= instance.rateLimits.max.ipapi) {
-        // TODO make rate limit error
-        throw Error()
-      } else if (rateLimitCount.ipapi?.[hour]) {
-        rateLimitCount.ipapi[hour] += 1
-      } else {
-        rateLimitCount.ipapi = { [hour]: 1 }
-      }
-      const resp = await (await fetch(`http://ip-api.com/json/${ip}`)).json() as { country: string }
-      instance.cache[ip] = resp.country
-      return resp.country
+      const country = await invokeIpApi(rateLimitCount.ipapi, hour, instance.rateLimits.max.ipapi, ip);
+      instance.incrementCounter('ipapi', hour)
+      instance.cache[ip] = country
+      return country
     } catch (e) {
       try {
-        if (rateLimitCount.ipstack?.[hour] >= instance.rateLimits.max.ipstack) {
-          // TODO make rate limit error
-          throw Error()
-        } else if (rateLimitCount.ipstack?.[hour]) {
-          rateLimitCount.ipstack[hour] += 1
-        } else {
-          rateLimitCount.ipstack = { [hour]: 1 }
+        const country = await invokeIpStack(rateLimitCount.ipstack, hour, instance.rateLimits.max.ipstack, ip);
+        instance.incrementCounter('ipstack', hour)
+        instance.cache[ip] = country
+        return country
+      } catch (e: any) {
+        if (e?.message === Errors.RateExceeded || e?.message === Errors.BadAccessKey) {
+          throw (e)
         }
-        const resp = await fetch(`https://api.ipstack.com/${ip}?access_key=${config.accessKey}`)
-        const respJson = await resp.json() as { success: boolean, country_name: string, error: { type: string } }
-        if (!(respJson.success)) {
-          if (respJson.error.type === 'invalid_access_key') {
-            throw Error()
-          }
-          throw Error()
-        }
-        instance.cache[ip] = respJson.country_name
-        return respJson.country_name
-      } catch (e) {
         throw new Error('backend error')
       }
     }
-  }}
+  }
+}
 
-  export default app
-  export {app, options}
+export default app
+export { app }
+
+export async function invokeIpStack(rateCount: RateCounter['ipstack'], hour: string, rateLimit: number, ip: string) {
+  if (rateCount?.[hour] >= rateLimit) {
+    throw Error(Errors.RateExceeded);
+  } else if (rateCount?.[hour]) {
+    rateCount[hour] += 1;
+  } else {
+    rateCount = { [hour]: 1 };
+  }
+  const resp = await fetch(`http://api.ipstack.com/${ip}?access_key=${config.accessKey}`);
+  const respJson = await resp.json() as { country_name: string; error?: { type: string; }; };
+  if ((respJson.error)) {
+    if (respJson.error.type === 'invalid_access_key') {
+      throw Error(Errors.BadAccessKey);
+    }
+    throw Error();
+  }
+  return respJson.country_name;
+}
+
+export async function invokeIpApi(rateCount: RateCounter['ipapi'], hour: string, rateLimit: number, ip: string) {
+  if (rateCount?.[hour] >= rateLimit) {
+    throw Error(Errors.RateExceeded);
+  } else if (rateCount?.[hour]) {
+    rateCount[hour] += 1;
+  } else {
+    rateCount = { [hour]: 1 };
+  }
+  const resp = await (await fetch(`http://ip-api.com/json/${ip}`)).json() as { status: string, country: string; };
+  if (resp.status !== 'success') {
+    throw Error()
+  }
+  return resp.country;
+}
