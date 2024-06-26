@@ -1,5 +1,7 @@
 
 ## Setup
+* clone repo
+* run `npm install`
 * copy config.example.json to config.json
 * enter apistack api key
 
