@@ -1,0 +1,7 @@
+{
+    "accessKey": "secretkey",
+    "apiRateLimits": {
+        "ipapi": 1,
+        "ipstack":1
+    }
+}

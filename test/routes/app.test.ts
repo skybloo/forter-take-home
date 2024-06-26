@@ -1,6 +1,3 @@
-// TODO test rate limits
-// todo test errors
-// todo test caching
 
 import { test } from 'node:test'
 import * as assert from 'node:assert'
@@ -33,13 +30,11 @@ test('ipstack smoke test', async (t) => {
   assert.equal(result, 'United States')
 })
 
-test('rate limits',async (t) => {
-  const original = process.env['config_location']
-  process.env['config_location'] = 'test/config.test.json'
+test('rate limits, errors, caching',async (t) => {
   const app = await build(t)
-  await app.inject({url: '/ip?ip=74.102.202.138'})
-  await app.inject({url: '/ip?ip=74.102.202.139'})
+  await app.inject({url: '/ip?ip=1.1.1.1'})
+  await app.inject({url: '/ip?ip=1.1.1.2'})
+  await app.inject({url: '/ip?ip=1.1.1.2'})
   const res = await app.inject({url: '/ip?ip=1.1.1.3'})
   assert.equal(res.statusCode, 429)
-  process.env['config_location'] = original
 } )
